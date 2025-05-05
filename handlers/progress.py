@@ -2,7 +2,6 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.utils.markdown import bold, italic, code
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -33,12 +32,16 @@ async def cmd_progress(message: Message, state: FSMContext, session: AsyncSessio
     themes = get_themes()
     theme_names = {theme["id"]: theme["name"] for theme in themes}
     
+    # Получаем результаты тестов напрямую из БД
+    test_results_query = select(TestResult).where(TestResult.user_id == message.from_user.id)
+    test_results = await session.execute(test_results_query)
+    test_results_list = test_results.scalars().all()
+    
     completed_themes_text = ""
-    if progress["completed_themes"]:
-        for theme_id in progress["completed_themes"]:
-            theme_name = theme_names.get(theme_id, theme_id)
-            score = progress["scores"][theme_id]
-            completed_themes_text += f"• {theme_name}: {score:.1f}%\n"
+    if test_results_list:
+        for result in test_results_list:
+            theme_name = theme_names.get(result.theme, result.theme)
+            completed_themes_text += f"• {theme_name}: {result.score:.1f}%\n"
     else:
         completed_themes_text = "Вы еще не прошли ни одного теста\n"
     
@@ -61,10 +64,9 @@ async def cmd_progress(message: Message, state: FSMContext, session: AsyncSessio
     username = message.from_user.username or f"ID{message.from_user.id}"
     
     await message.answer(
-        f"{bold('Ваш прогресс')}\n\n"
-        f"{bold('Пройденные тесты:')}\n{completed_themes_text}\n"
-        f"{bold('Фишинг:')}\n{phishing_text}\n"
-        f"{bold('Рекомендации:')}\n{recommendations_text}\n\n"
-        f"{italic('Используйте /test для прохождения тестов по разным темам')}",
-        parse_mode="HTML"
+        f"<b>Ваш прогресс</b>\n\n"
+        f"<b>Пройденные тесты:</b>\n{completed_themes_text}\n"
+        f"<b>Фишинг:</b>\n{phishing_text}\n"
+        f"<b>Рекомендации:</b>\n{recommendations_text}\n\n"
+        f"<i>Используйте /test для прохождения тестов по разным темам</i>"
     ) 

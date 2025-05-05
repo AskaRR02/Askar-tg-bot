@@ -71,7 +71,7 @@ async def get_user_progress(session: AsyncSession, user_id: int) -> Dict[str, An
 
 def generate_phishing_link() -> str:
     unique_id = hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()[:8]
-    return f"https://securit-y-check.com/{unique_id}"
+    return f"https://example-simulation-only.edu/{unique_id}"
 
 
 def sanitize_filename(filename: str) -> str:

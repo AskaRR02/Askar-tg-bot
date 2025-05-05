@@ -14,11 +14,16 @@ from handlers import start, test, upload, phishing, progress, password
 
 
 async def main():
+    # Настраиваем логирование
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         stream=sys.stdout
     )
+    
+    # Устанавливаем уровень логирования для наших модулей
+    logging.getLogger('services').setLevel(logging.DEBUG)
+    logging.getLogger('handlers').setLevel(logging.DEBUG)
     
     if not BOT_TOKEN:
         logging.error("BOT_TOKEN не найден в переменных окружения")

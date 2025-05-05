@@ -1,10 +1,13 @@
 import os
+import asyncio
+import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import MAX_FILE_SIZE
 from utils.helpers import get_or_create_user, sanitize_filename
@@ -43,18 +46,88 @@ async def process_file(message: Message, state: FSMContext, session: AsyncSessio
         return
     
     await state.set_state(UploadStates.processing)
-    status_message = await message.answer(f"<b>Загружаю файл...</b>")
+    
+    await state.update_data(
+        file_id=message.document.file_id,
+        file_name=message.document.file_name,
+        file_size=message.document.file_size
+    )
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Отменить сканирование", callback_data="cancel_scan")
+    
+    status_message = await message.answer(
+        f"<b>Загружаю файл... (0%)</b>\n\n"
+        f"Размер файла: {message.document.file_size // 1024} КБ\n"
+        f"Файл: {message.document.file_name}\n\n"
+        f"<i>Сканирование больших файлов может занять несколько минут.</i>",
+        reply_markup=builder.as_markup()
+    )
+    
+    await state.update_data(status_message_id=status_message.message_id)
     
     try:
         file = await message.bot.get_file(message.document.file_id)
         file_path = file.file_path
         
+        await status_message.edit_text(
+            f"<b>Загружаю файл... (50%)</b>\n\n"
+            f"Размер файла: {message.document.file_size // 1024} КБ\n"
+            f"Файл: {message.document.file_name}\n\n"
+            f"<i>Сканирование больших файлов может занять несколько минут.</i>",
+            reply_markup=builder.as_markup()
+        )
+        
         file_content = await message.bot.download_file(file_path)
         filename = sanitize_filename(message.document.file_name)
         
-        await status_message.edit_text(f"<b>Анализирую файл...</b>")
+        await status_message.edit_text(
+            f"<b>Анализирую файл...</b>\n\n"
+            f"Файл загружен и отправлен на анализ в VirusTotal.\n"
+            f"Ожидаем результаты сканирования...\n\n"
+            f"<i>Это может занять несколько минут для больших файлов.</i>",
+            reply_markup=builder.as_markup()
+        )
         
-        result = await scan_file(file_content.read(), filename)
+        scan_task = asyncio.create_task(scan_file(file_content.read(), filename))
+        
+        dots = 0
+        for i in range(30):
+            if scan_task.done():
+                break
+                
+            dots = (dots + 1) % 4
+            dot_text = "." * dots
+            
+            current_state = await state.get_state()
+            if current_state != UploadStates.processing:
+                scan_task.cancel()
+                logging.info(f"Сканирование отменено пользователем: {message.from_user.id}")
+                return
+                
+            try:
+                await status_message.edit_text(
+                    f"<b>Анализирую файл{dot_text}</b>\n\n"
+                    f"Файл загружен и отправлен на анализ в VirusTotal.\n"
+                    f"Ожидаем результаты сканирования... ({i+1}/30)\n\n"
+                    f"<i>Это может занять несколько минут для больших файлов.</i>",
+                    reply_markup=builder.as_markup()
+                )
+            except Exception as e:
+                logging.error(f"Ошибка при обновлении статуса: {e}")
+            
+            await asyncio.sleep(10)
+        
+        if not scan_task.done():
+            scan_task.cancel()
+            await status_message.edit_text(
+                f"<b>Превышено время ожидания</b>\n\n"
+                f"Сканирование файла заняло слишком много времени.\n"
+                f"Попробуйте файл меньшего размера или повторите позже с помощью команды /upload"
+            )
+            return
+            
+        result = await scan_task
         
         if result["error"]:
             await status_message.edit_text(
@@ -87,6 +160,7 @@ async def process_file(message: Message, state: FSMContext, session: AsyncSessio
             )
     
     except Exception as e:
+        logging.exception(f"Ошибка при обработке файла: {str(e)}")
         await status_message.edit_text(
             f"<b>Произошла ошибка при обработке файла</b>\n\n"
             f"Ошибка: {str(e)}\n\n"
@@ -95,6 +169,17 @@ async def process_file(message: Message, state: FSMContext, session: AsyncSessio
     
     finally:
         await state.clear()
+
+
+@router.callback_query(UploadStates.processing, F.data == "cancel_scan")
+async def cancel_scan(callback: CallbackQuery, state: FSMContext):
+    await callback.answer("Операция отменена")
+    await state.clear()
+    
+    await callback.message.edit_text(
+        f"<b>Сканирование отменено</b>\n\n"
+        f"Вы можете попробовать снова с командой /upload"
+    )
 
 
 @router.message(UploadStates.waiting_for_file)

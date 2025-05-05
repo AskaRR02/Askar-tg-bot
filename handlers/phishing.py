@@ -64,12 +64,30 @@ async def select_scenario(callback: CallbackQuery, state: FSMContext):
     message_text = scenario["message"].format(phishing_link=phishing_link)
     
     builder = InlineKeyboardBuilder()
-    builder.button(text="Перейти по ссылке", url=phishing_link)
+    builder.button(text="Перейти по ссылке", callback_data="click_phishing")
     builder.button(text="Это фишинг?", callback_data="report_phishing")
     
     await state.set_state(PhishingStates.simulating)
     await callback.message.answer(message_text, reply_markup=builder.as_markup())
     await callback.answer()
+
+
+@router.callback_query(PhishingStates.simulating, F.data == "click_phishing")
+async def click_phishing(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    phishing_log = PhishingLog(user_id=callback.from_user.id, clicked=True)
+    session.add(phishing_log)
+    await session.commit()
+    
+    await callback.answer("Вы перешли по фишинговой ссылке!", show_alert=True)
+    
+    await callback.message.answer(
+        f"<b>Внимание! Вы перешли по фишинговой ссылке!</b>\n\n"
+        f"В реальной ситуации это могло привести к:\n"
+        f"• Краже личных данных\n"
+        f"• Заражению устройства вирусами\n"
+        f"• Потере доступа к аккаунтам\n\n"
+        f"Нажмите «Это фишинг?», чтобы научиться распознавать такие угрозы."
+    )
 
 
 @router.callback_query(PhishingStates.simulating, F.data == "report_phishing")
@@ -78,7 +96,6 @@ async def report_phishing(callback: CallbackQuery, state: FSMContext, session: A
     scenario_id = data["scenario_id"]
     scenario = get_scenario(scenario_id)
     
-    # Log as not clicked (correctly identified)
     phishing_log = PhishingLog(user_id=callback.from_user.id, clicked=False)
     session.add(phishing_log)
     await session.commit()
@@ -122,22 +139,4 @@ async def show_education(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "restart_phishing")
 async def restart_phishing(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     await callback.answer()
-    await cmd_phishing(callback.message, state, session)
-
-
-# Для имитации перехода по фишинговой ссылке
-@router.message(F.text.contains("securit-y-check.com"))
-async def clicked_phishing(message: Message, session: AsyncSession):
-    # Log as clicked
-    phishing_log = PhishingLog(user_id=message.from_user.id, clicked=True)
-    session.add(phishing_log)
-    await session.commit()
-    
-    await message.answer(
-        f"<b>Внимание! Вы перешли по фишинговой ссылке!</b>\n\n"
-        f"В реальной ситуации это могло привести к:\n"
-        f"• Краже личных данных\n"
-        f"• Заражению устройства вирусами\n"
-        f"• Потере доступа к аккаунтам\n\n"
-        f"Используйте /phishing, чтобы научиться распознавать такие угрозы."
-    ) 
+    await cmd_phishing(callback.message, state, session) 

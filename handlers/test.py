@@ -66,10 +66,12 @@ async def send_question(message: Message, state: FSMContext):
     question_index = data["current_question"]
     total_questions = data["total_questions"]
     
+    if question_index >= total_questions:
+        return
+    
     question = get_question(theme_id, question_index)
     
     if not question:
-        await finish_test(message, state)
         return
     
     builder = InlineKeyboardBuilder()
@@ -128,12 +130,21 @@ async def process_answer(callback: CallbackQuery, state: FSMContext, session: As
 
 
 @router.callback_query(TestStates.answering, F.data == "next_question")
-async def next_question(callback: CallbackQuery, state: FSMContext):
+async def next_question(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     await callback.answer()
+    data = await state.get_data()
+    
+    question_index = data["current_question"]
+    total_questions = data["total_questions"]
+    
+    if question_index >= total_questions:
+        await finish_test(callback.message, state, session)
+        return
+        
     await send_question(callback.message, state)
 
 
-async def finish_test(message: Message, state: FSMContext, session: AsyncSession = None):
+async def finish_test(message: Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
     
     theme_id = data["theme_id"]
@@ -142,9 +153,8 @@ async def finish_test(message: Message, state: FSMContext, session: AsyncSession
     
     score = calculate_score(theme_id, correct_answers)
     
-    if session:
-        user_id = message.chat.id
-        await save_test_result(session, user_id, theme_id, score)
+    user_id = message.chat.id
+    await save_test_result(session, user_id, theme_id, score)
     
     theme_name = next((t["name"] for t in get_themes() if t["id"] == theme_id), "Неизвестная тема")
     
